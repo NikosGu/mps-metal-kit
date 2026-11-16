@@ -1,0 +1,29 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C++ / Objective-C++ / Metal / PyTorch extension artifacts
+*.so
+*.dylib
+*.o
+*.metallib
+*.air
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Test & benchmark caches
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# OS & editor files
+.DS_Store
+*.swp
+*~
+.vscode/
+.idea/

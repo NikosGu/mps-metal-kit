@@ -1,0 +1,30 @@
+name: macOS Apple Silicon MPS CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test-apple-silicon:
+    runs-on: macos-14
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run parity & autograd test suite
+        run: pytest -v
+
+      - name: Run smoke benchmark
+        run: python benchmarks/bench_mps_metal_kit.py --quick
