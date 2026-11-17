@@ -1,9 +1,10 @@
-"""Zero-copy Apple AMX `Accelerate` spectral operators with Metal GPU eigenvector backward."""
+"""Zero-copy Apple AMX & parallel CUDA FP64 spectral operators with GPU Daleckii-Krein backward."""
 from __future__ import annotations
 
 import torch
 
 from .compiler import is_mps_available, load_extension
+from .cuda_compiler import is_cuda_available, load_cuda_extension
 
 EIGH_GRAD_CLIP = 100.0
 
@@ -35,7 +36,6 @@ def _safe_cpu_eigh(G64: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
 class _UnifiedEighFn(torch.autograd.Function):
     @staticmethod
     def forward(ctx, G: torch.Tensor):
-        ext = load_extension()
         orig_shape = G.shape
         orig_dt = G.dtype
         D = orig_shape[-1]
@@ -43,7 +43,10 @@ class _UnifiedEighFn(torch.autograd.Function):
         B = Gf.shape[0]
         L_out = torch.empty((B, D), device=G.device, dtype=torch.float32)
         V_out = torch.empty((B, D, D), device=G.device, dtype=torch.float32)
-        ext.amx_eigh_fwd(Gf, L_out, V_out)
+        if G.device.type == "cuda":
+            load_cuda_extension().cuda_eigh_fwd(Gf, L_out, V_out)
+        else:
+            load_extension().amx_eigh_fwd(Gf, L_out, V_out)
         ctx.save_for_backward(L_out, V_out)
         ctx.orig_shape = orig_shape
         ctx.orig_dt = orig_dt
@@ -119,7 +122,6 @@ class _WeightedGramSubspaceFn(torch.autograd.Function):
         rel_tol: float,
         min_eig: float,
     ):
-        ext = load_extension()
         orig_dt = X.dtype
         B, M, D = X.shape
         r = min(int(rank), D)
@@ -131,7 +133,14 @@ class _WeightedGramSubspaceFn(torch.autograd.Function):
 
         U_out = torch.empty((B, D, r), device=X.device, dtype=torch.float32)
         PACK_out = torch.empty((B, D + 3, k_pad), device=X.device, dtype=torch.float32)
-        r_eff = ext.amx_dual_gram_subspace_fwd(Xc, Wc, Lc, U_out, PACK_out, r, k_pad, float(rel_tol), float(min_eig))
+        if X.device.type == "cuda":
+            r_eff = load_cuda_extension().cuda_dual_gram_subspace_fwd(
+                Xc, Wc, Lc, U_out, PACK_out, r, k_pad, float(rel_tol), float(min_eig)
+            )
+        else:
+            r_eff = load_extension().amx_dual_gram_subspace_fwd(
+                Xc, Wc, Lc, U_out, PACK_out, r, k_pad, float(rel_tol), float(min_eig)
+            )
 
         ctx.orig_dt = orig_dt
         ctx.r_eff = int(r_eff)
@@ -140,8 +149,8 @@ class _WeightedGramSubspaceFn(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, gU: torch.Tensor):
-        ext = load_extension()
         Xc, Wc, Lc, PACK = ctx.saved_tensors
+        ext = load_cuda_extension() if Xc.device.type == "cuda" else load_extension()
         GU = gU.float().contiguous()
         GX = torch.zeros_like(Xc)
         GW = torch.zeros_like(Wc)
@@ -160,9 +169,12 @@ def reference_eigh(G: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
 
 
 def unified_eigh(G: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    """Zero-copy Apple AMX `float64` symmetric eigendecomposition for PyTorch MPS tensors."""
-    if G.device.type == "mps" and is_mps_available() and G.dtype != torch.float64:
-        return _UnifiedEighFn.apply(G)
+    """Differentiable `float64` symmetric eigendecomposition on MPS (AMX) and CUDA (parallel GPU `tred2+tql2`)."""
+    if G.dtype != torch.float64:
+        if G.device.type == "mps" and is_mps_available():
+            return _UnifiedEighFn.apply(G)
+        if G.device.type == "cuda" and is_cuda_available() and G.shape[-1] <= 256:
+            return _UnifiedEighFn.apply(G)
     return torch.linalg.eigh(0.5 * (G + G.transpose(-1, -2)))
 
 
@@ -211,12 +223,9 @@ def weighted_gram_subspace(
     else:
         lens_t = torch.tensor(lengths, dtype=torch.int32, device=X.device)
 
-    if (
-        X.device.type == "mps"
-        and is_mps_available()
-        and X.dtype != torch.float64
-        and D <= 256
-        and r <= 12
-    ):
+    has_native = (X.device.type == "mps" and is_mps_available()) or (
+        X.device.type == "cuda" and is_cuda_available()
+    )
+    if has_native and X.dtype != torch.float64 and D <= 256 and r <= 12:
         return _WeightedGramSubspaceFn.apply(X, weights, lens_t, r, rel_tol, min_eig)
     return reference_weighted_gram_subspace(X, weights, r, lengths=lengths, rel_tol=rel_tol, min_eig=min_eig)

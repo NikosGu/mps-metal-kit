@@ -17,8 +17,10 @@ void amx_eigh_fwd(torch::Tensor G, torch::Tensor L_out, torch::Tensor V_out) {
     float* l_ptr = UnifiedBuffer::from_tensor(L_out).data_as<float>();
     float* v_ptr = UnifiedBuffer::from_tensor(V_out).data_as<float>();
 
-    std::vector<double> workA((size_t)D * (size_t)D);
-    std::vector<double> workW((size_t)D);
+    thread_local std::vector<double> workA;
+    thread_local std::vector<double> workW;
+    workA.resize((size_t)D * (size_t)D);
+    workW.resize((size_t)D);
 
     for (int b = 0; b < B; ++b) {
         const float* gb = g_ptr + (size_t)b * D * D;
@@ -62,7 +64,7 @@ int64_t amx_dual_gram_subspace_fwd(
     std::memset(p_ptr, 0, (size_t)B * (D + 3) * kp * sizeof(float));
 
     int max_k = 1;
-    std::vector<double> Aw, Gram, evals, Vscaled, Q_col;
+    thread_local std::vector<double> Aw, Gram, evals, Vscaled, Q_col;
 
     for (int b = 0; b < B; ++b) {
         int Lb = std::clamp((int)l_ptr[b], 0, M);

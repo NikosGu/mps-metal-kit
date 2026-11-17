@@ -1,9 +1,10 @@
-"""Prefix-sum ragged segment linear operators with single-encoder multi-wave MPSStream fusion."""
+"""Prefix-sum ragged segment linear operators on Apple Silicon Metal and NVIDIA CUDA."""
 from __future__ import annotations
 
 import torch
 
 from .compiler import is_mps_available, load_extension
+from .cuda_compiler import is_cuda_available, load_cuda_extension
 
 
 def _pack_wave_metadata(intervals: list[tuple[int, int, int]], dev: torch.device):
@@ -39,7 +40,7 @@ def _pack_wave_metadata(intervals: list[tuple[int, int, int]], dev: torch.device
 class _RaggedWavesLinearFn(torch.autograd.Function):
     @staticmethod
     def forward(ctx, wave_intervals, x: torch.Tensor, *wave_weights: torch.Tensor):
-        ext = load_extension()
+        ext = load_cuda_extension() if x.device.type == "cuda" else load_extension()
         orig_dt = x.dtype
         B, T, _ = x.shape
         D_out = wave_weights[0].shape[1]
@@ -67,9 +68,9 @@ class _RaggedWavesLinearFn(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, gY: torch.Tensor):
-        ext = load_extension()
         saved = ctx.saved_tensors
         Xc = saved[0]
+        ext = load_cuda_extension() if Xc.device.type == "cuda" else load_extension()
         Ws = list(saved[1:])
         act_list, off_list, st_list, sp_list, tot_list = ctx.meta
 
@@ -121,6 +122,9 @@ def ragged_waves_linear(
         return x.new_zeros((x.shape[0], x.shape[1], 0))
     D_in = x.shape[-1]
     D_out = wave_weights[0].shape[1]
-    if x.device.type == "mps" and is_mps_available() and D_in <= 256 and D_out <= 256:
+    has_native = (x.device.type == "mps" and is_mps_available()) or (
+        x.device.type == "cuda" and is_cuda_available()
+    )
+    if has_native and D_in <= 256 and D_out <= 256:
         return _RaggedWavesLinearFn.apply(wave_intervals, x, *wave_weights)
     return reference_ragged_waves_linear(x, wave_weights, wave_intervals)

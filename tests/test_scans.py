@@ -6,7 +6,11 @@ import torch
 
 import mps_metal_kit as mmk
 
-DEV = torch.device("mps" if mmk.is_mps_available() else "cpu")
+DEV = torch.device("cuda" if mmk.is_cuda_available() else ("mps" if mmk.is_mps_available() else "cpu"))
+
+if torch.cuda.is_available():
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
 
 
 @pytest.mark.skipif(not mmk.is_mps_available(), reason="Apple Silicon MPS device required")

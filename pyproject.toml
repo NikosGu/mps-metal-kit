@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mps-metal-kit"
-version = "0.1.0"
-description = "Zero-copy C++20 / Objective-C++ / Metal / Accelerate kernel toolkit and custom autograd primitives for PyTorch MPS on Apple Silicon."
+version = "0.2.0"
+description = "Zero-copy C++20 / Objective-C++ / Metal / Accelerate and parallel CUDA / FP64 kernel toolkit for PyTorch MPS and CUDA."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
@@ -59,8 +59,16 @@ include-package-data = true
 where = ["src"]
 
 [tool.setuptools.package-data]
-mps_metal_kit = ["csrc/*.mm", "shaders/*.metal", "include/mps_metal_kit/*.hpp"]
+mps_metal_kit = [
+    "csrc/*.mm",
+    "shaders/*.metal",
+    "include/mps_metal_kit/*.hpp",
+    "cuda_csrc/*.hpp",
+    "cuda_csrc/*.cpp",
+    "cuda_csrc/*.cu",
+]
 
 [tool.pytest.ini_options]
+pythonpath = ["src"]
 testpaths = ["tests"]
 addopts = "-q"

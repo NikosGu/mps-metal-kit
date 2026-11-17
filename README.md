@@ -1,8 +1,8 @@
 # mps-metal-kit
 
-**Zero-Copy C++20 / Objective-C++ / Metal / Accelerate Kernel Toolkit for PyTorch MPS on Apple Silicon.**
+**Zero-Copy C++20 / Objective-C++ / Metal / Accelerate & Parallel CUDA / FP64 Kernel Toolkit for PyTorch (`mps` & `cuda`).**
 
-`mps-metal-kit` eliminates the Python dispatch, command-encoder splitting, dynamic `MPSGraph` padding, and CPU-GPU copy bottlenecks that limit custom sequence-modeling, linear-attention, spectral, and ragged-batch operators on PyTorch's `mps` backend.
+`mps-metal-kit` eliminates the Python dispatch, command-encoder splitting, dynamic `MPSGraph` padding, and CPU-GPU `.cpu()` eigensolver bottlenecks that limit custom sequence-modeling, linear-attention, spectral, and ragged-batch operators on both **Apple Silicon (`mps`)** and **NVIDIA GPUs (`cuda`)**.
 
 ---
 
@@ -26,10 +26,12 @@ On NVIDIA GPUs, researchers rely on **Triton** or **`flash-linear-attention`** t
 - **Register-Resident Fast-Weight & DeltaNet Scans**:
   - `token_delta_scan`: Token-level gated DeltaNet / fast-weight recurrence holding the `[64 x D_k]` state matrix in hardware registers across the sequence with `CKI=16` checkpointed exact backpropagation and zero-barrier `simd_sum` transpose reductions (**`36x` faster** than PyTorch MPS).
   - `deltanet_chunk_scan` & `chunked_delta_rule`: WY-factorized chunkwise causal DeltaNet and general matrix-transition scan $S_{n+1} = \gamma_n M_n S_n + B_n$ with exact gradients $(\nabla M, \nabla B, \nabla \gamma, \nabla S_0)$.
-- **Hybrid Apple AMX `float64` Forward + Metal GPU Spectral Backward**:
-  - `unified_eigh`: Differentiable symmetric eigendecomposition (`dsyevd_` with `dsyev_` fallback) reading and writing MPS Unified Memory in place.
-  - `weighted_gram_subspace`: Automatic **Dual Gram** ($L \times L$ when $L < D$) vs **Primal Gram** ($D \times D$ when $L \ge D$) top-$r$ orthonormal subspace extraction on AMX paired with a fused $O(M \cdot r \cdot D)$ Daleckii-Krein backward kernel on the Metal GPU (**`14x` faster** than PyTorch).
-- **Prefix-Sum Ragged Multi-Wave Projections (`ragged_waves_linear`)**: Launches `1` threadgroup per active token via binary search on prefix-sum offsets—eliminating rectangular padding amplification across variable-length segments.
+- **Hybrid Apple AMX (`mps`) & 256-Thread Parallel Cyclic Jacobi `FP64` (`cuda`) Spectral Kernels**:
+  - `unified_eigh`: Differentiable symmetric eigendecomposition reading/writing Unified Memory in place on Apple AMX (`dsyevd_`) and executing entirely on-GPU via a 256-thread parallel IEEE-754 `float64` Cyclic Jacobi eigensolver (running 100% inside shared SRAM for $D \le 32$ and L2 cache up to $D \le 256$) on NVIDIA CUDA—with zero `.cpu()` PCIe round-trips and zero single-thread bulge-chasing bottlenecks.
+  - `weighted_gram_subspace`: Automatic **Dual Gram** ($L \times L$ when $L < D$) vs **Primal Gram** ($D \times D$ when $L \ge D$) top-$r$ orthonormal subspace extraction paired with a fused $O(M \cdot r \cdot D)$ Daleckii-Krein backward kernel on Metal and CUDA (**`14x` faster** than PyTorch).
+- **Zero-Swap Apple Silicon Unified Memory Guard (`memory.py`)**:
+  - `configure_mps_memory` and `maybe_trim_mps_cache` constrain the Metal caching allocator pool to prevent macOS SSD swap stalls during long training runs on 16-32 GB Macs.
+- **Prefix-Sum Ragged Multi-Wave Projections (`ragged_waves_linear`)**: Launches `1` threadgroup/threadblock per active token via binary search on prefix-sum offsets—eliminating rectangular padding amplification across variable-length segments on both Metal and CUDA.
 
 ---
 

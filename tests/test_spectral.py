@@ -6,7 +6,11 @@ import torch
 
 import mps_metal_kit as mmk
 
-DEV = torch.device("mps" if mmk.is_mps_available() else "cpu")
+DEV = torch.device("cuda" if mmk.is_cuda_available() else ("mps" if mmk.is_mps_available() else "cpu"))
+
+if torch.cuda.is_available():
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
 
 
 def test_unified_eigh_parity():
@@ -57,3 +61,29 @@ def test_weighted_gram_subspace_dual_and_primal_parity(m_len: int, d_dim: int):
     assert (P_k - P_r).abs().max().item() < 2e-5
     assert (X.grad - X_ref.grad).abs().max().item() < 5e-5
     assert (W.grad - W_ref.grad).abs().max().item() < 5e-5
+
+
+def test_degenerate_collinear_and_zero_length_stability():
+    torch.manual_seed(909)
+    B, M, D, rank = 4, 64, 128, 6
+    X_raw = 0.25 * torch.randn(B, M, D, device=DEV)
+    # Row 0: repeated identical leading/trailing vectors (collinear rank-deficient Householder/QL stress test)
+    X_raw[0, :20] = X_raw[0, 0:1].clone()
+    X_raw[0, 20:40] = X_raw[0, 20:21].clone() + 1e-7 * torch.randn(20, D, device=DEV)
+    # Row 1: zero-weighted prefix followed by low-rank span
+    W_raw = torch.rand(B, M, device=DEV) + 0.1
+    W_raw[1, :16] = 0.0
+    lengths = [64, 52, 0, 12]
+
+    X = X_raw.detach().requires_grad_(True)
+    W = W_raw.detach().requires_grad_(True)
+    probe = torch.randn(B, D, D, device=DEV)
+
+    U_k = mmk.weighted_gram_subspace(X, W, rank=rank, lengths=lengths)
+    P_k = torch.bmm(U_k, U_k.transpose(1, 2))
+    (P_k * probe).sum().backward()
+
+    assert torch.isfinite(U_k).all()
+    assert torch.isfinite(X.grad).all()
+    assert torch.isfinite(W.grad).all()
+    assert U_k[2].abs().max().item() == 0.0

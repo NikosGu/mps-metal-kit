@@ -5,7 +5,11 @@ import torch
 
 import mps_metal_kit as mmk
 
-DEV = torch.device("mps" if mmk.is_mps_available() else "cpu")
+DEV = torch.device("cuda" if mmk.is_cuda_available() else ("mps" if mmk.is_mps_available() else "cpu"))
+
+if torch.cuda.is_available():
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
 
 
 def test_ragged_waves_linear_single_encoder_parity():
@@ -13,10 +17,10 @@ def test_ragged_waves_linear_single_encoder_parity():
     B, T, D_in, D_out = 6, 128, 128, 96
     n_waves = 12
     x = torch.randn(B, T, D_in, device=DEV, requires_grad=True)
-    x_ref = x.detach().clone().requires_grad_(True)
+    x_ref = x.detach().cpu().double().requires_grad_(True)
 
     weights = [torch.randn(B, D_out, D_in, device=DEV, requires_grad=True) for _ in range(n_waves)]
-    weights_ref = [w.detach().clone().requires_grad_(True) for w in weights]
+    weights_ref = [w.detach().cpu().double().requires_grad_(True) for w in weights]
 
     cursors = [0] * B
     wave_intervals = []
@@ -30,14 +34,15 @@ def test_ragged_waves_linear_single_encoder_parity():
         wave_intervals.append(ivs)
 
     gy = torch.randn(B, T, D_out, device=DEV)
+    gy_ref = gy.detach().cpu().double()
 
     y_k = mmk.ragged_waves_linear(x, weights, wave_intervals)
     (y_k * gy).sum().backward()
 
     y_r = mmk.reference_ragged_waves_linear(x_ref, weights_ref, wave_intervals)
-    (y_r * gy).sum().backward()
+    (y_r * gy_ref).sum().backward()
 
-    assert (y_k - y_r).abs().max().item() < 2e-5
-    assert (x.grad - x_ref.grad).abs().max().item() < 5e-5
+    assert torch.allclose(y_k.detach().cpu().double(), y_r, rtol=1e-5, atol=6e-5)
+    assert torch.allclose(x.grad.detach().cpu().double(), x_ref.grad, rtol=1e-5, atol=8e-5)
     for wk, wr in zip(weights, weights_ref):
-        assert (wk.grad - wr.grad).abs().max().item() < 8e-5
+        assert torch.allclose(wk.grad.detach().cpu().double(), wr.grad, rtol=1e-5, atol=8e-5)

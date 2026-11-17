@@ -1,16 +1,25 @@
-"""Register-resident matrix-state associative and DeltaNet scans on Apple Silicon Metal."""
+"""Register-resident matrix-state associative and DeltaNet scans on Apple Silicon Metal and NVIDIA CUDA."""
 from __future__ import annotations
 
 import torch
 import torch.nn.functional as F
 
 from .compiler import is_mps_available, load_extension
+from .cuda_compiler import is_cuda_available, load_cuda_extension
+
+
+def _scan_ext_for(dev: torch.device):
+    if dev.type == "mps":
+        return load_extension()
+    if dev.type == "cuda":
+        return load_cuda_extension()
+    raise RuntimeError(f"Unsupported native scan device: {dev}")
 
 
 class _DeltaNetChunkScanFn(torch.autograd.Function):
     @staticmethod
     def forward(ctx, M: torch.Tensor, B_in: torch.Tensor, decay: torch.Tensor, S0: torch.Tensor):
-        ext = load_extension()
+        ext = _scan_ext_for(B_in.device)
         orig_dt = B_in.dtype
         B, H, N, DK, DV = B_in.shape
         BH = B * H
@@ -33,8 +42,8 @@ class _DeltaNetChunkScanFn(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, g_hist: torch.Tensor | None, g_end: torch.Tensor | None):
-        ext = load_extension()
         Mc, Dc, St_hist = ctx.saved_tensors
+        ext = _scan_ext_for(Mc.device)
         B, H, N, DK, DV = ctx.shapes
         BH = B * H
         dev = Mc.device
@@ -101,7 +110,10 @@ def deltanet_chunk_scan(
     if S0 is None:
         S0 = B_in.new_zeros((B, H, DK, DV))
 
-    if B_in.device.type == "mps" and is_mps_available() and 1 <= DK <= 64 and 1 <= DV <= 128 and N > 0:
+    has_native = (B_in.device.type == "mps" and is_mps_available()) or (
+        B_in.device.type == "cuda" and is_cuda_available()
+    )
+    if has_native and 1 <= DK <= 64 and 1 <= DV <= 128 and N > 0:
         return _DeltaNetChunkScanFn.apply(M, B_in, decay, S0)
     return reference_deltanet_chunk_scan(M, B_in, decay, S0)
 
@@ -117,7 +129,7 @@ class _TokenDeltaScanFn(torch.autograd.Function):
         gamma: torch.Tensor,
         S0: torch.Tensor,
     ):
-        ext = load_extension()
+        ext = _scan_ext_for(q.device)
         orig_dt = q.dtype
         B, H, T, DK = q.shape
         DV = v.shape[-1]
@@ -147,8 +159,8 @@ class _TokenDeltaScanFn(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, g_out: torch.Tensor | None, g_st_end: torch.Tensor | None):
-        ext = load_extension()
         Qc, Kc, Vc, Bc, Gc, CKPT = ctx.saved_tensors
+        ext = _scan_ext_for(Qc.device)
         B, H, T, DK, DV, nck = ctx.shapes
         BH = B * H
         f = dict(device=Qc.device, dtype=torch.float32)
@@ -221,7 +233,10 @@ def token_delta_scan(
     if S0 is None:
         S0 = q.new_zeros((B, H, DV, DK))
 
-    if q.device.type == "mps" and is_mps_available() and DK in (64, 128) and DV == 64 and T > 0:
+    has_native = (q.device.type == "mps" and is_mps_available()) or (
+        q.device.type == "cuda" and is_cuda_available()
+    )
+    if has_native and DK in (64, 128) and DV == 64 and T > 0:
         return _TokenDeltaScanFn.apply(q, k, v, beta, gamma, S0)
     return reference_token_delta_scan(q, k, v, beta, gamma, S0)
 
